@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        #progress-container {
+            display: none;
+            width: 100%;
+            background: #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+        #progress-bar {
+            width: 0%;
+            height: 20px;
+            background: blue;
+            transition: width 0.2s ease-in-out;
+        }
+        #download-link {
+            display: none;
+            margin-top: 15px;
+        }
+        #quality-warning {
+            color: red;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <div class="container mt-5">
+        <div class="card shadow-lg">
+            <div class="card-body">
+                <h1 class="text-center">YouTube Downloader</h1>
+                <form onsubmit="event.preventDefault(); startDownload();">
+                    <div class="mb-3">
+                        <label class="form-label">Masukkan URL Video</label>
+                        <input type="text" id="video-url" name="url" class="form-control" placeholder="Masukkan URL" required>
+                    </div>
+                    <div class="mb-3">
+                        <select id="format-option" name="format" class="form-select" onchange="toggleQualityOptions()">
+                            <option value="">Pilih Format</option>
+                            <option value="video">Video</option>
+                            <option value="audio">Audio</option>
+                        </select>
+                    </div>
+                    <div class="mb-3" id="quality-container" style="display: none;">
+                        <select id="quality-option" name="quality" class="form-select" onchange="checkQualitySupport()">
+                            <option value="">Pilih Kualitas Video</option>
+                        </select>
+                        <div id="quality-warning"></div>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Download</button>
+                </form>
+
+                <div id="loading" class="text-center mt-3" style="display: none;">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <p>Mendownload, harap tunggu...</p>
+                </div>
+
+                <div id="progress-container">
+                    <div id="progress-bar"></div>
+                </div>
+                <p id="progress-text" class="text-center mt-2" style="display: none;">0%</p>
+                <a id="download-link" class="btn btn-success w-100" href="#" download>Download File</a>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let availableQualities = [];
+
+        document.getElementById("download-link").addEventListener("click", function () {
+            setTimeout(() => {
+                location.reload();
+            }, 2000);
+        });
+
+        document.getElementById('video-url').addEventListener('change', function () {
+            let url = this.value;
+            if (!url) return;
+
+            fetch(`/get_available_qualities?url=${encodeURIComponent(url)}`)
+                .then(response => response.json())
+                .then(data => {
+                    let qualitySelect = document.getElementById("quality-option");
+                    let defaultQualities = [144, 240, 360, 480, 720, 1080, 1440, 2160, 4320]; // Daftar tetap
+                    qualitySelect.innerHTML = '<option value="">Pilih Kualitas Video</option>';
+
+                    if (data.qualities) {
+                        let availableQualities = data.qualities
+                            .map(q => parseInt(q)) // Ubah string ke angka
+                            .filter(q => !isNaN(q) && q >= 144) // Hapus yang bukan angka & resolusi di bawah 144p
+                            .sort((a, b) => a - b); // Urutkan dari kecil ke besar
+                        
+                        // Pastikan hanya menampilkan kualitas yang ada di daftar tetap
+                        let finalQualities = defaultQualities.filter(q => availableQualities.includes(q));
+
+                        finalQualities.forEach(q => {
+                            let option = document.createElement("option");
+                            option.value = q;
+
+                            // Menambahkan label tambahan untuk resolusi tinggi
+                            let label = `${q} P`;
+                            if (q === 1080) label += " (Full HD)";
+                            if (q === 1440) label += " (2K)";
+                            if (q === 2160) label += " (4K)";
+                            if (q === 4320) label += " (8K)";
+
+                            option.textContent = label;
+                            qualitySelect.appendChild(option);
+                        });
+
+                        // Tampilkan peringatan jika hanya kualitas rendah yang tersedia
+                        let warningDiv = document.getElementById("quality-warning");
+                        warningDiv.textContent = finalQualities.length === 0 ? "Kualitas video sangat rendah atau tidak tersedia." : "";
+                    }
+                })
+                .catch(error => console.error("Error fetching qualities:", error));
+        });
+
+        function startDownload() {
+            let url = document.getElementById("video-url").value;
+            let format = document.getElementById("format-option").value;
+            let quality = document.getElementById("quality-option").value;
+
+            if (!url || !format) {
+                alert("Silakan masukkan URL dan pilih format.");
+                return;
+            }
+
+            console.log("Memulai download..."); // Debugging
+
+            // Tampilkan progress bar dan setel awal ke 0%
+            document.getElementById("progress-container").style.display = "block";
+            document.getElementById("progress-bar").style.width = "0%";
+            document.getElementById("progress-text").textContent = "0%";
+            
+            document.getElementById("loading").style.display = "block";
+            document.getElementById("download-link").style.display = "none";
+
+            fetch("/download", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({ url, format, quality })
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log("Response dari server:", data); // Debugging
+
+                if (data.client_id) {
+                    trackProgress(data.client_id);
+                } else {
+                    alert("Gagal memulai download.");
+                    document.getElementById("loading").style.display = "none";
+                    document.getElementById("progress-container").style.display = "none";
+                }
+            })
+            .catch(error => {
+                console.error("Error:", error);
+                alert("Terjadi kesalahan.");
+                document.getElementById("loading").style.display = "none";
+                document.getElementById("progress-container").style.display = "none";
+            });
+        }
+
+        function trackProgress(client_id) {
+            console.log("Tracking progress untuk client_id:", client_id); // Debugging
+
+            socket.on("progress_update", function (data) {
+                console.log("Progress update:", data); // Debugging
+                if (data.client_id === client_id) {
+                    let progress = data.progress;
+                    document.getElementById("progress-bar").style.width = progress + "%";
+                    document.getElementById("progress-text").textContent = progress + "%";
+                    document.getElementById("progress-text").style.display = "block";
+                }
+            });
+
+            socket.on("download_complete", function (data) {
+                console.log("Download selesai:", data); // Debugging
+                if (data.client_id === client_id) {
+                    document.getElementById("loading").style.display = "none";
+                    document.getElementById("progress-container").style.display = "none";
+                    let downloadLink = document.getElementById("download-link");
+                    downloadLink.style.display = "block";
+                    downloadLink.href = "/download_file?filename=" + encodeURIComponent(data.filename);
+                }
+            });
+
+            socket.on("download_failed", function (data) {
+                console.log("Download gagal:", data); // Debugging
+                if (data.client_id === client_id) {
+                    alert("Download gagal!");
+                    document.getElementById("loading").style.display = "none";
+                    document.getElementById("progress-container").style.display = "none";
+                }
+            });
+        }
+
+        function toggleQualityOptions() {
+            let format = document.getElementById("format-option").value;
+            document.getElementById("quality-container").style.display = format === "video" ? "block" : "none";
+        }
+    </script>
+</body>
+</html>
