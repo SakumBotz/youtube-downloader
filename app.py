@@ -181,4 +181,4 @@ if __name__ == '__main__':
     # Jalankan thread untuk auto clean file lama
     threading.Thread(target=clean_old_files, daemon=True).start()
 
-    socketio.run(app, host='192.168.18.215', port=5000, debug=True, use_reloader=False)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=False)
